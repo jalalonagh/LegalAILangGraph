@@ -1,0 +1,20 @@
+# =============================================================================
+# Qdrant configuration for local development
+# =============================================================================
+log_level: INFO
+
+storage:
+  storage_path: /qdrant/storage
+
+service:
+  max_request_size_mb: 256
+  http_port: 6333
+  grpc_port: 6334
+  enable_tls: false
+  max_workers: 4
+  max_openfiles: 1024
+
+telemetry_disabled: false
+
+# Default vectors settings for legal documents
+# These can be overridden per collection

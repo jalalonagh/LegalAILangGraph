@@ -1,0 +1,176 @@
+# =============================================================================
+# docker-compose.yml - Local Development Environment
+# =============================================================================
+services:
+  # --- FastAPI Application ---
+  legal-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: legal-ai:latest
+    container_name: legal-ai
+    env_file:
+      - .env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./:/app
+      - /tmp/legalai_uploads:/tmp/legalai_uploads
+      - ./migrations:/app/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+    networks:
+      - legal-ai-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --- PostgreSQL (checkpoint store + app metadata) ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: legal-ai-postgres
+    environment:
+      POSTGRES_USER: legalai
+      POSTGRES_PASSWORD: legalai
+      POSTGRES_DB: legalai
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docker/postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - legal-ai-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legalai -d legalai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Redis (caching, rate limiting) ---
+  redis:
+    image: redis:7-alpine
+    container_name: legal-ai-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - legal-ai-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # --- Qdrant (vector database) ---
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: legal-ai-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./docker/qdrant/config.yaml:/config/config.yaml
+    networks:
+      - legal-ai-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Ollama (local LLM provider) ---
+  ollama:
+    image: ollama/ollama:latest
+    container_name: legal-ai-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - legal-ai-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
+  # --- TEI Reranker (optional - can be disabled via healthcheck) ---
+  tei-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.2
+    container_name: legal-ai-tei-reranker
+    environment:
+      - MODEL_ID=BAAI/bge-reranker-v2-m3
+      - TASK=rerank
+      - MAX_INPUT_TOKENS=512
+    ports:
+      - "8080:80"
+    volumes:
+      - tei_reranker_data:/data/hf-cache
+    networks:
+      - legal-ai-net
+    restart: unless-stopped
+    profiles: ["reranker"]
+
+  # --- Prometheus (metrics) ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: legal-ai-prometheus
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    networks:
+      - legal-ai-net
+    profiles: ["monitoring"]
+    restart: unless-stopped
+
+  # --- Grafana (optional dashboards) ---
+  grafana:
+    image: grafana/grafana:play
+    container_name: legal-ai-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - legal-ai-net
+    profiles: ["monitoring"]
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:
+  qdrant_data:
+  ollama_data:
+  tei_reranker_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  legal-ai-net:
+    driver: bridge

@@ -1,0 +1,39 @@
+# =============================================================================
+# docker-compose.dev.yml - Development Overrides
+# =============================================================================
+services:
+  legal-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: legal-ai:dev
+    environment:
+      - APP_ENV=development
+      - APP_DEBUG=true
+      - RELOAD=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./:/app
+      - /tmp/legalai_uploads:/tmp/legalai_uploads
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    profiles: ["dev"]
+
+  # --- Hot-reload Ollama model preloader ---
+  ollama-preloader:
+    image: ollama/ollama:latest
+    container_name: legal-ai-ollama-preloader
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        "
+        curl -s http://ollama:11434/api/tags | grep -q qwen2.5 || true
+        echo 'Preloading models...'
+        ollama pull qwen2.5:7b-instruct-q4_K_M 2>/dev/null || true
+        ollama pull qwen2.5:14b-instruct-q4_K_M 2>/dev/null || true
+        ollama pull qwen2.5:3b-instruct-q4_K_M 2>/dev/null || true
+        echo 'Models preloaded'
+        "
+    depends_on:
+      ollama:
+        condition: service_started
+    profiles: ["dev"]
